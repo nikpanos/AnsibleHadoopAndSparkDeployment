@@ -1,0 +1,561 @@
+- name: Stopping running services
+  hosts: wp3node01
+  become: true
+  become_user: wp3hadoop
+  tasks:
+    - name: Stopping services
+      command: "{{ item }}"
+      with_items:
+        - /usr/local/spark/sbin/stop-history-server.sh
+        - /usr/local/hadoop/sbin/mr-jobhistory-daemon.sh stop historyserver
+        - /usr/local/hadoop/sbin/stop-yarn.sh
+        - /usr/local/hadoop/sbin/stop-dfs.sh
+- name: Setting all nodes
+  hosts: tknodes
+  become: true
+  become_method: sudo
+  tasks:
+    - name: Setting variables
+      set_fact:
+        local_path: ~/git/AnsibleHadoopAndSparkDeployment
+        master_node: hadoopnode1
+        node_ips:
+            wp3node01: hadoopnode1
+            wp3node02: hadoopnode2
+            wp3node03: hadoopnode3
+    - name: Determine if Java is installed
+      stat:
+        path: /usr/java/jdk1.8.0_201-amd64/bin/java
+      register: javaInstallation
+    - name: Determine if Hadoop is installed
+      stat:
+        path: /usr/local/hadoop/LICENSE.txt
+      register: hadoopInstallation
+    - name: Add mappings to /etc/hosts
+      blockinfile:
+        path: /etc/hosts
+        block: |
+          {{ item.ip }} {{ item.name }}
+        marker: "# {mark} ANSIBLE MANAGED BLOCK {{ item.name }}"
+      with_items:
+      - { name: hadoopnode1, ip: 192.168.0.1 }
+      - { name: hadoopnode2, ip: 192.168.0.2 }
+      - { name: hadoopnode3, ip: 192.168.0.3 }
+    - name: Verify /mnt/{{inventory_hostname}}vol01/hadoop exists
+      file:
+        path: /mnt/{{inventory_hostname}}vol01/hadoop
+        owner: wp3hadoop
+        group: wp3hadoop
+        mode: "u+rw,g+rw,o-rwx"
+        state: directory
+    - name: Verify /mnt/{{inventory_hostname}}vol01/hadoop/hdfs exists
+      file:
+        path: /mnt/{{inventory_hostname}}vol01/hadoop/hdfs
+        owner: wp3hadoop
+        group: wp3hadoop
+        mode: "u+rw,g+rw,o-rwx"
+        state: directory
+    - name: Verify /mnt/{{inventory_hostname}}vol01/hadoop/hdfs/datanode exists
+      file:
+        path: /mnt/{{inventory_hostname}}vol01/hadoop/hdfs/datanode
+        owner: wp3hadoop
+        group: wp3hadoop
+        mode: "u+rw,g+rw,o-rwx"
+        state: directory
+    - name: Verify /mnt/{{inventory_hostname}}vol01/hadoop/yarn exists
+      file:
+        path: /mnt/{{inventory_hostname}}vol01/hadoop/yarn
+        owner: wp3hadoop
+        group: wp3hadoop
+        mode: "u+rw,g+rw,o-rwx"
+        state: directory
+    - name: Verify /mnt/{{inventory_hostname}}vol01/hadoop/yarn/local exists
+      file:
+        path: /mnt/{{inventory_hostname}}vol01/hadoop/yarn/local
+        owner: wp3hadoop
+        group: wp3hadoop
+        mode: "u+rw,g+rw,o-rwx"
+        state: directory
+    - name: Verify /mnt/{{inventory_hostname}}vol01/hadoop/yarn/log exists
+      file:
+        path: /mnt/{{inventory_hostname}}vol01/hadoop/yarn/log
+        owner: wp3hadoop
+        group: wp3hadoop
+        mode: "u+rw,g+rw,o-rwx"
+        state: directory
+    - name: Copying Oracle Java rpm to hosts
+      copy:
+        src: "{{local_path}}/jdk-8u201-linux-x64.rpm"
+        dest: /tmp/jdk-8u201-linux-x64.rpm
+      when: not javaInstallation.stat.exists
+    - name: Installing Oracle Java rpm to hosts
+      yum:
+        name: /tmp/jdk-8u201-linux-x64.rpm
+        state: present
+      when: not javaInstallation.stat.exists
+    - name: Deleting Oracle Java rpm from hosts
+      file:
+        name: /tmp/jdk-8u201-linux-x64.rpm
+        state: absent
+      when: not javaInstallation.stat.exists
+    - name: Setting java alternatives
+      command: update-alternatives --set java /usr/java/jdk1.8.0_201-amd64/bin/java
+      when: not javaInstallation.stat.exists
+    - name: Setting javac alternatives
+      command: update-alternatives --set javac /usr/java/jdk1.8.0_201-amd64/bin/javac
+      when: not javaInstallation.stat.exists
+    - name: Copying and unzipping Hadoop distribution
+      unarchive:
+        src: "{{local_path}}/hadoop-2.9.2.tar.gz"
+        dest: /usr/local
+      when: not hadoopInstallation.stat.exists
+    - name: Moving Hadoop executables to HADOOP_HOME dir
+      command: mv /usr/local/hadoop-2.9.2 /usr/local/hadoop
+      when: not hadoopInstallation.stat.exists
+    - name: Creating hadoop_setup.sh file in /etc/profile.d if not existent
+      file:
+        path: /etc/profile.d/hadoop_setup.sh
+        owner: root
+        group: root
+        mode: "u+rw,g+rw,o+r"
+        state: touch
+    - name: Modifying hadoop_setup.sh
+      blockinfile:
+        path: /etc/profile.d/hadoop_setup.sh
+        block: |
+            export PATH=$PATH:/usr/java/jdk1.8.0_201-amd64/bin:/usr/java/jdk1.8.0_201-amd64/jre/bin
+            export J2SDKDIR=/usr/java/jdk1.8.0_201-amd64
+            export J2REDIR=/usr/java/jdk1.8.0_201-amd64/jre
+            export JAVA_HOME=/usr/java/jdk1.8.0_201-amd64
+            export HADOOP_HOME=/usr/local/hadoop
+            export PATH=$PATH:$HADOOP_HOME/bin:$HADOOP_HOME/sbin
+            export HADOOP_MAPRED_HOME=$HADOOP_HOME
+            export HADOOP_COMMON_HOME=$HADOOP_HOME
+            export HADOOP_HDFS_HOME=$HADOOP_HOME
+            export YARN_HOME=$HADOOP_HOME
+            export HADOOP_COMMON_LIB_NATIVE_DIR=$HADOOP_HOME/lib/native
+            export CLASSPATH=$CLASSPATH:/usr/local/hadoop/lib/*:.
+            export HADOOP_OPTS="$HADOOP_OPTS -Djava.security.egd=file:/dev/../dev/urandom -Djava.library.path=$HADOOP_HOME/lib/native"
+            export SPARK_HOME=/usr/local/spark
+            export PATH=$PATH:$SPARK_HOME/bin
+            export LD_LIBRARY_PATH=$HADOOP_HOME/lib/native/:$LD_LIBRARY_PATH
+            export HADOOP_CONF_DIR=$HADOOP_HOME/etc/hadoop
+            export YARN_CONF_DIR=$HADOOP_HOME/etc/hadoop
+    - name: Setting JAVA_HOME in hadoop-env.sh
+      lineinfile: 
+          dest: /usr/local/hadoop/etc/hadoop/hadoop-env.sh
+          regexp: '^export JAVA_HOME='
+          line: 'export JAVA_HOME=/usr/java/jdk1.8.0_201-amd64'
+          backrefs: yes
+    - name: Copying core-site.xml to hosts
+      copy:
+        src: "{{local_path}}/empty-conf.xml"
+        dest: /usr/local/hadoop/etc/hadoop/core-site.xml
+        owner: wp3hadoop
+        group: wp3hadoop
+    - name: Copying hdfs-site.xml to hosts
+      copy:
+        src: "{{local_path}}/empty-conf.xml"
+        dest: /usr/local/hadoop/etc/hadoop/hdfs-site.xml
+        owner: wp3hadoop
+        group: wp3hadoop
+    - name: Copying mapred-site.xml to hosts
+      copy:
+        src: "{{local_path}}/empty-conf.xml"
+        dest: /usr/local/hadoop/etc/hadoop/mapred-site.xml
+        owner: wp3hadoop
+        group: wp3hadoop
+    - name: Copying yarn-site.xml to hosts
+      copy:
+        src: "{{local_path}}/empty-conf.xml"
+        dest: /usr/local/hadoop/etc/hadoop/yarn-site.xml
+        owner: wp3hadoop
+        group: wp3hadoop
+    - name: Add properties to core-site.xml
+      xml:
+        path: /usr/local/hadoop/etc/hadoop/core-site.xml
+        xpath: /configuration
+        pretty_print: yes
+        set_children:
+            - property:
+                _:
+                    - name: "fs.defaultFS"
+                    - value: "hdfs://{{master_node}}:8020/"
+            - property:
+                _:
+                    - name: io.file.buffer.size
+                    - value: "131072"
+    - name: Add properties to hdfs-site.xml
+      xml:
+        path: /usr/local/hadoop/etc/hadoop/hdfs-site.xml
+        xpath: /configuration
+        pretty_print: yes
+        set_children:
+            - property:
+                _:
+                    - name: dfs.namenode.http-bind-host
+                    - value: "{{master_node}}"
+            - property:
+                _:
+                    - name: dfs.namenode.https-bind-host
+                    - value: "{{master_node}}"
+            - property:
+                _:
+                    - name: dfs.namenode.rpc-address
+                    - value: "{{master_node}}:8020"
+            - property:
+                _:
+                    - name: dfs.namenode.servicerpc-address
+                    - value: "{{master_node}}:9000"
+            - property:
+                _:
+                    - name: dfs.datanode.https.address
+                    - value: "{{node_ips[inventory_hostname]}}:50475"
+            - property:
+                _:
+                    - name: dfs.namenode.backup.address
+                    - value: "{{master_node}}:50100"
+            - property:
+                _:
+                    - name: dfs.namenode.backup.http-address
+                    - value: "{{master_node}}:50105"
+            - property:
+                _:
+                    - name: dfs.namenode.https-address
+                    - value: "{{master_node}}:50470"
+            - property:
+                _:
+                    - name: dfs.namenode.secondary.http-address
+                    - value: "{{master_node}}:50090"
+            - property:
+                _:
+                    - name: dfs.namenode.secondary.https-address
+                    - value: "{{master_node}}:50091"
+            - property:
+                _:
+                    - name: dfs.namenode.http-address
+                    - value: "{{master_node}}:50070"
+            - property:
+                _:
+                    - name: dfs.datanode.address
+                    - value: "{{node_ips[inventory_hostname]}}:50010"
+            - property:
+                _:
+                    - name: dfs.datanode.http.address
+                    - value: "{{node_ips[inventory_hostname]}}:50075"
+            - property:
+                _:
+                    - name: dfs.datanode.ipc.address
+                    - value: "{{node_ips[inventory_hostname]}}:50020"
+            - property:
+                _:
+                    - name: dfs.namenode.rpc-bind-host
+                    - value: "{{master_node}}"
+            - property:
+                _:
+                    - name: dfs.namenode.servicerpc-bind-host
+                    - value: "{{master_node}}"
+            - property:
+                _:
+                    - name: dfs.namenode.name.dir
+                    - value: "file:/mnt/{{inventory_hostname}}vol01/hadoop/hdfs/namenode"
+            - property:
+                _:
+                    - name: dfs.datanode.data.dir
+                    - value: "file:/mnt/{{inventory_hostname}}vol01/hadoop/hdfs/datanode"
+            - property:
+                _:
+                    - name: dfs.namenode.checkpoint.dir
+                    - value: "file:/mnt/{{inventory_hostname}}vol01/hadoop/hdfs/checkpoints"
+            - property:
+                _:
+                    - name: dfs.replication
+                    - value: "1"
+            - property:
+                _:
+                    - name: dfs.block.size
+                    - value: "134217728"
+    - name: Add properties to mapred-site.xml
+      xml:
+        path: /usr/local/hadoop/etc/hadoop/mapred-site.xml
+        xpath: /configuration
+        pretty_print: yes
+        set_children:
+            - property:
+                _:
+                    - name: mapred.job.tracker
+                    - value: "{{master_node}}:9001"
+            - property:
+                _:
+                    - name: mapreduce.framework.name
+                    - value: yarn
+            - property:
+                _:
+                    - name: mapreduce.jobhistory.address
+                    - value: "{{master_node}}:10020"
+            - property:
+                _:
+                    - name: mapreduce.jobhistory.webapp.address
+                    - value: "{{master_node}}:19888"
+            - property:
+                _:
+                    - name: yarn.app.mapreduce.am.staging-dir
+                    - value: /user/app
+            - property:
+                _:
+                    - name: mapred.child.java.opts
+                    - value: -Djava.security.egd=file:/dev/../dev/urandom
+            - property:
+                _:
+                    - name: mapreduce.job.user.classpath.first
+                    - value: "true"
+            - property:
+                _:
+                    - name: mapreduce.map.memory.mb
+                    - value: "2560"
+            - property:
+                _:
+                    - name: mapreduce.reduce.memory.mb
+                    - value: "2560"
+            - property:
+                _:
+                    - name: mapreduce.map.java.opts
+                    - value: "-Xmx2048m"
+            - property:
+                _:
+                    - name: mapreduce.reduce.java.opts
+                    - value: "-Xmx2048m"
+    - name: Add properties to yarn-site.xml
+      xml:
+        path: /usr/local/hadoop/etc/hadoop/yarn-site.xml
+        xpath: /configuration
+        pretty_print: yes
+        set_children:
+            - property:
+                _:
+                    - name: yarn.nodemanager.hostname
+                    - value: "{{node_ips[inventory_hostname]}}"
+            - property:
+                _:
+                    - name: yarn.log.server.url
+                    - value: "http://{{master_node}}:19888/jobhistory/logs"
+            - property:
+                _:
+                    - name: yarn.nodemanager.log-aggregation.compression-type
+                    - value: gz
+            - property:
+                _:
+                    - name: yarn.resourcemanager.hostname
+                    - value: "{{master_node}}"
+            - property:
+                _:
+                    - name: yarn.resourcemanager.bind-host
+                    - value: "{{master_node}}"
+            - property:
+                _:
+                    - name: yarn.nodemanager.bind-host
+                    - value: "{{node_ips[inventory_hostname]}}"
+            - property:
+                _:
+                    - name: yarn.nodemanager.aux-services
+                    - value: mapreduce_shuffle,spark_shuffle
+            - property:
+                _:
+                    - name: yarn.nodemanager.aux-services.mapreduce_shuffle.class
+                    - value: org.apache.hadoop.mapred.ShuffleHandler
+            - property:
+                _:
+                    - name: yarn.nodemanager.aux-services.spark_shuffle.class
+                    - value: org.apache.spark.network.yarn.YarnShuffleService
+            - property:
+                _:
+                    - name: yarn.nodemanager.aux-services.spark_shuffle.classpath
+                    - value: /usr/local/hadoop/lib/spark-2.4.3-yarn-shuffle.jar
+            - property:
+                _:
+                    - name: yarn.log-aggregation-enable
+                    - value: "true"
+            - property:
+                _:
+                    - name: yarn.nodemanager.local-dirs
+                    - value: "file:/mnt/{{inventory_hostname}}vol01/hadoop/yarn/local"
+            - property:
+                _:
+                    - name: yarn.nodemanager.log-dirs
+                    - value: "file:/mnt/{{inventory_hostname}}vol01/hadoop/yarn/log"
+            - property:
+                _:
+                    - name: yarn.nodemanager.remote-app-log-dir
+                    - value: "hdfs://{{master_node}}:8020/var/log/hadoop-yarn/apps"
+            - property:
+                _:
+                    - name: yarn.nodemanager.vmem-check-enabled
+                    - value: "false"
+            - property:
+                _:
+                    - name: yarn.nodemanager.vmem-pmem-ratio
+                    - value: "4"
+            - property:
+                _:
+                    - name: yarn.nodemanager.resource.cpu-vcores
+                    - value: "2"
+            - property:
+                _:
+                    - name: yarn.nodemanager.resource.memory-mb
+                    - value: "3584"
+            - property:
+                _:
+                    - name: yarn.scheduler.minimum-allocation-mb
+                    - value: "1024"
+            - property:
+                _:
+                    - name: yarn.scheduler.maximum-allocation-mb
+                    - value: "3584"
+    - name: Fixing permissions on HADOOP_HOME dir
+      file:
+        path: /usr/local/hadoop
+        owner: wp3hadoop
+        group: wp3hadoop
+        recurse: yes
+        state: directory
+- name: Setting master node
+  hosts: wp3node01
+  become: true
+  become_method: sudo
+  tasks:
+    - name: Determine if Spark is installed
+      stat:
+        path: /usr/local/spark/LICENSE
+      register: sparkInstallation
+    - name: Verify /mnt/{{inventory_hostname}}vol01/hadoop/hdfs/namenode exists
+      file:
+        path: "/mnt/{{inventory_hostname}}vol01/hadoop/hdfs/namenode"
+        owner: wp3hadoop
+        group: wp3hadoop
+        mode: "u+rw,g+rw,o-rwx"
+        state: directory
+    - name: Verify /mnt/{{inventory_hostname}}vol01/hadoop/hdfs/checkpoints exists
+      file:
+        path: /mnt/{{inventory_hostname}}vol01/hadoop/hdfs/checkpoints
+        owner: wp3hadoop
+        group: wp3hadoop
+        mode: "u+rw,g+rw,o-rwx"
+        state: directory
+    - name: Copying masters file
+      copy:
+        src: "{{local_path}}/masters"
+        dest: /usr/local/hadoop/etc/hadoop/masters
+        owner: wp3hadoop
+        group: wp3hadoop
+    - name: Copying slaves file
+      copy:
+        src: "{{local_path}}/slaves"
+        dest: /usr/local/hadoop/etc/hadoop/slaves
+        owner: wp3hadoop
+        group: wp3hadoop
+    - name: Copying and unzipping Spark distribution
+      unarchive:
+        src: "{{local_path}}/spark-2.4.3-bin-hadoop2.7.tgz"
+        dest: /usr/local
+      when: not sparkInstallation.stat.exists
+    - name: Moving Spark executables to SPARK_HOME dir
+      command: mv /usr/local/spark-2.4.3-bin-hadoop2.7 /usr/local/spark
+      when: not sparkInstallation.stat.exists
+    - name: Creating spark-env.sh
+      file:
+        path: /usr/local/spark/conf/spark-env.sh
+        owner: wp3hadoop
+        group: wp3hadoop
+        state: touch
+    - name: Modifying spark-env.sh
+      blockinfile:
+        path: /usr/local/spark/conf/spark-env.sh
+        block: |
+          export SPARK_HISTORY_OPTS="$SPARK_HISTORY_OPTS -Dspark.eventLog.enabled=true -Dspark.eventLog.dir=hdfs://{{master_node}}:8020/var/log/spark -Dspark.history.fs.logDirectory=hdfs://{{master_node}}:8020/var/log/spark"
+          export HADOOP_CONF_DIR=$HADOOP_HOME/etc/hadoop
+          export YARN_CONF_DIR=$HADOOP_HOME/etc/hadoop
+    - name: Creating spark-defaults.conf
+      file:
+        path: /usr/local/spark/conf/spark-defaults.conf
+        owner: wp3hadoop
+        group: wp3hadoop
+        state: touch
+    - name: Modifying spark-defaults.conf
+      blockinfile:
+        path: /usr/local/spark/conf/spark-defaults.conf
+        block: |
+          spark.yarn.archive                      hdfs:///spark-jars/jars.tar.gz
+          spark.master                            yarn
+          spark.serializer                        org.apache.spark.serializer.KryoSerializer
+          spark.eventLog.enabled                  true
+          spark.eventLog.dir                      hdfs://{{master_node}}:8020/var/log/spark
+          spark.yarn.historyServer.address        {{master_node}}:18080
+          spark.shuffle.service.enabled           true
+          spark.executor.cores                    2
+          spark.executor.instances                2
+    - name: Fixing permissions on SPARK_HOME dir
+      file:
+        path: /usr/local/spark
+        owner: wp3hadoop
+        group: wp3hadoop
+        recurse: yes
+        state: directory
+- name: Starting up services
+  hosts: tknodes
+  become: true
+  become_user: wp3hadoop
+  tasks:
+    - name: Determine if /usr/local/hadoop/lib/spark-2.4.3-yarn-shuffle.jar exists
+      stat:
+        path: "/usr/local/hadoop/lib/spark-2.4.3-yarn-shuffle.jar"
+      register: sparkYarnShuffleFile
+    - name: Copying spark-2.4.3-yarn-shuffle.jar to hadoop libs
+      copy:
+        src: "{{local_path}}/spark-2.4.3-yarn-shuffle.jar"
+        dest: /usr/local/hadoop/lib/spark-2.4.3-yarn-shuffle.jar
+        owner: wp3hadoop
+        group: wp3hadoop
+      when: not sparkYarnShuffleFile.stat.exists
+- name: Starting up services
+  hosts: wp3node01
+  become: true
+  become_user: wp3hadoop
+  tasks:
+    - name: Determine if HDFS is formatted
+      stat:
+        path: "/mnt/{{inventory_hostname}}vol01/hadoop/hdfs/namenode/current"
+      register: hdfsFormatted    
+    - name: Formatting Namenode
+      command: /usr/local/hadoop/bin/hdfs namenode -format
+      when: not hdfsFormatted.stat.exists
+    - name: Starting services
+      command: "{{ item }}"
+      with_items:
+        - /usr/local/hadoop/sbin/start-dfs.sh
+        - /usr/local/hadoop/sbin/start-yarn.sh
+    - name: Creating HDFS directories
+      command: "{{ item }}"
+      with_items:
+        - /usr/local/hadoop/bin/hdfs dfs -mkdir /tmp
+        - /usr/local/hadoop/bin/hdfs dfs -chmod -R 1777 /tmp
+        - /usr/local/hadoop/bin/hdfs dfs -mkdir /user
+        - /usr/local/hadoop/bin/hdfs dfs -chmod -R 1777 /user
+        - /usr/local/hadoop/bin/hdfs dfs -mkdir /user/app
+        - /usr/local/hadoop/bin/hdfs dfs -chmod -R 1777 /user/app
+        - /usr/local/hadoop/bin/hdfs dfs -mkdir -p /var/log/hadoop-yarn
+        - /usr/local/hadoop/bin/hdfs dfs -chmod -R 1777 /var/log/hadoop-yarn
+        - /usr/local/hadoop/bin/hdfs dfs -mkdir -p /var/log/hadoop-yarn/apps
+        - /usr/local/hadoop/bin/hdfs dfs -chmod -R 1777 /var/log/hadoop-yarn/apps
+        - /usr/local/hadoop/bin/hdfs dfs -mkdir /user/wp3hadoop
+        - /usr/local/hadoop/bin/hdfs dfs -mkdir /var/log/spark
+        - /usr/local/hadoop/bin/hdfs dfs -chmod -R 1777 /var/log/spark
+        - /usr/local/hadoop/bin/hdfs dfs -mkdir /spark-jars
+        - tar -cvzf /tmp/jars.tar.gz -C /usr/local/spark/jars .
+        - /usr/local/hadoop/bin/hdfs dfs -put /tmp/jars.tar.gz /spark-jars
+        - rm /tmp/jars.tar.gz
+      when: not hdfsFormatted.stat.exists
+    - name: Starting history services
+      command: "{{ item }}"
+      with_items:
+        - /usr/local/hadoop/sbin/mr-jobhistory-daemon.sh start historyserver
+        - /usr/local/spark/sbin/start-history-server.sh

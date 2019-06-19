@@ -1,0 +1,159 @@
+- name: Installing tinc on all nodes
+  hosts: tknodes
+  tasks:
+    - name: Determine if tinc is installed
+      stat:
+        path: /usr/sbin/tincd
+      register: tincInstallation
+    - name: Installing automake gcc zlib-devel lzo-devel openssl-devel to hosts
+      become: true
+      become_method: sudo
+      yum:
+        name: "{{ packages }}"
+      vars:
+        packages:
+            - automake
+            - gcc
+            - zlib-devel
+            - lzo-devel
+            - openssl-devel
+      when: not tincInstallation.stat.exists
+    - name: Download tinc-1.0.35.tar.gz
+      get_url:
+        url: https://tinc-vpn.org/packages/tinc-1.0.35.tar.gz
+        dest: /tmp/tinc-1.0.35.tar.gz
+        mode: '664'
+      when: not tincInstallation.stat.exists
+    - name: Unzipping tinc-1.0.35.tar.gz
+      command: tar -xvf tinc-1.0.35.tar.gz
+      args:
+        chdir: /tmp
+      when: not tincInstallation.stat.exists
+    - name: Making tinc
+      command: "{{ item }}"
+      args:
+        chdir: /tmp/tinc-1.0.35
+      with_items:
+        - /tmp/tinc-1.0.35/configure --prefix=
+        - make
+      when: not tincInstallation.stat.exists
+    - name: Installing tinc
+      command: make install
+      args:
+        chdir: /tmp/tinc-1.0.35
+      become: true
+      become_method: sudo
+      when: not tincInstallation.stat.exists
+- name: Configuring all nodes
+  hosts: tknodes
+  become: true
+  become_method: sudo
+  tasks:
+    - name: Determine if RSA keypair exists
+      stat:
+        path: /etc/tinc/linodeVPN/rsa_key.priv
+      register: rsaPair
+    - name: Setting variables
+      set_fact:
+        local_ips:
+            wp3node01: 192.168.0.1
+            wp3node02: 192.168.0.2
+            wp3node03: 192.168.0.3
+            wp3node04: 192.168.0.4
+            wp3node05: 192.168.0.5
+            wp3node06: 192.168.0.6
+            wp3node07: 192.168.0.7
+    - name: Verify /etc/tinc/linodeVPN/hosts exists
+      file:
+        path: /etc/tinc/linodeVPN/hosts
+        owner: root
+        group: root
+        state: directory
+    - name: Stopping and disabling tinc service
+      systemd:
+        name: tinc
+        state: stopped
+        enabled: no
+      ignore_errors: yes
+    - name: Creating /etc/tinc/linodeVPN/tinc.conf 
+      blockinfile:
+        create: yes
+        path: /etc/tinc/linodeVPN/tinc.conf 
+        block: |
+          Name = {{inventory_hostname}}
+          Device = /dev/net/tun
+          AddressFamily = ipv4
+    - name: Adding nodes in /etc/tinc/linodeVPN/tinc.conf 
+      blockinfile:
+        path: /etc/tinc/linodeVPN/tinc.conf 
+        block: |
+          ConnectTo = {{ item.key }}
+        marker: "# {mark} ANSIBLE MANAGED BLOCK {{ item.key }}"
+      loop: "{{ local_ips | dict2items }}"
+    - name: "Creating /etc/tinc/linodeVPN/hosts/{{inventory_hostname}}"
+      blockinfile:
+        path: "/etc/tinc/linodeVPN/hosts/{{inventory_hostname}}"
+        create: yes
+        block: |
+          Address = {{ansible_default_ipv4.address}}
+          Subnet = {{local_ips[inventory_hostname]}}
+      when: not rsaPair.stat.exists
+    - name: Creating RSA key pairs
+      shell: /usr/sbin/tincd -n linodeVPN -K 512 < /dev/null
+      when: not rsaPair.stat.exists
+    - name: Creating /etc/tinc/linodeVPN/tinc-up
+      blockinfile:
+        create: yes
+        path: /etc/tinc/linodeVPN/tinc-up
+        mode: '774'
+        block: |
+          #!/bin/sh
+          ip link set $INTERFACE up
+          ip addr add {{local_ips[inventory_hostname]}} dev $INTERFACE
+          ip route add 192.168.0.0/24 dev $INTERFACE
+    - name: Creating /etc/tinc/linodeVPN/tinc-down
+      blockinfile:
+        create: yes
+        path: /etc/tinc/linodeVPN/tinc-down
+        mode: '774'
+        block: |
+          #!/bin/sh
+          ip route del 192.168.0.0/24 dev $INTERFACE
+          ip addr del {{local_ips[inventory_hostname]}} dev $INTERFACE
+          ip link set $INTERFACE down
+    - name: Creating /etc/systemd/system/tinc.service
+      blockinfile:
+        create: yes
+        path: /etc/systemd/system/tinc.service
+        mode: '774'
+        block: |
+          [Unit]
+          Description=Tinc net linodeVPN
+          After=network.target
+          [Service]
+          Type=simple
+          WorkingDirectory=/etc/tinc/linodeVPN
+          ExecStart=/sbin/tincd -n linodeVPN -D -d0 -L
+          ExecReload=/sbin/tincd -n linodeVPN -kHUP
+          ExecStop=/sbin/tincd -n linodeVPN -k
+          TimeoutStopSec=5
+          Restart=always
+          RestartSec=60
+          [Install]
+          WantedBy=multi-user.target
+    - name: "Fetching /etc/tinc/linodeVPN/hosts/{{inventory_hostname}} file"
+      fetch:
+        src: "/etc/tinc/linodeVPN/hosts/{{inventory_hostname}}"
+        dest: /tmp/
+        flat: yes
+    - name: Copying host files to all nodes
+      copy:
+        src: "/tmp/{{item.key}}"
+        dest: "/etc/tinc/linodeVPN/hosts/"
+      loop: "{{ local_ips | dict2items }}"
+    - name: Enabling and starting tinc service
+      systemd:
+        name: tinc
+        enabled: yes
+        state: started
+        

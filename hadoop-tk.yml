@@ -23,6 +23,10 @@
             wp3node01: hadoopnode1
             wp3node02: hadoopnode2
             wp3node03: hadoopnode3
+            wp3node04: hadoopnode4
+            wp3node05: hadoopnode5
+            wp3node06: hadoopnode6
+            wp3node07: hadoopnode7
     - name: Determine if Java is installed
       stat:
         path: /usr/java/jdk1.8.0_201-amd64/bin/java
@@ -41,6 +45,10 @@
       - { name: hadoopnode1, ip: 192.168.0.1 }
       - { name: hadoopnode2, ip: 192.168.0.2 }
       - { name: hadoopnode3, ip: 192.168.0.3 }
+      - { name: hadoopnode4, ip: 192.168.0.4 }
+      - { name: hadoopnode5, ip: 192.168.0.5 }
+      - { name: hadoopnode6, ip: 192.168.0.6 }
+      - { name: hadoopnode7, ip: 192.168.0.7 }
     - name: Verify /mnt/{{inventory_hostname}}vol01/hadoop exists
       file:
         path: /mnt/{{inventory_hostname}}vol01/hadoop
@@ -93,16 +101,18 @@
         name: /tmp/jdk-8u201-linux-x64.rpm
         state: present
       when: not javaInstallation.stat.exists
-    - name: Deleting Oracle Java rpm from hosts
-      file:
-        name: /tmp/jdk-8u201-linux-x64.rpm
-        state: absent
-      when: not javaInstallation.stat.exists
-    - name: Setting java alternatives
-      command: update-alternatives --set java /usr/java/jdk1.8.0_201-amd64/bin/java
-      when: not javaInstallation.stat.exists
-    - name: Setting javac alternatives
-      command: update-alternatives --set javac /usr/java/jdk1.8.0_201-amd64/bin/javac
+    #- name: Deleting Oracle Java rpm from hosts
+    #  file:
+    #    name: /tmp/jdk-8u201-linux-x64.rpm
+    #    state: absent
+    #  when: not javaInstallation.stat.exists
+    - name: Setting java and javac alternatives
+      command: "{{ item }}"
+      with_items:
+        - update-alternatives --install "/usr/bin/java" "java" "/usr/java/jdk1.8.0_201-amd64/bin/java" 0
+        - update-alternatives --install "/usr/bin/javac" "javac" "/usr/java/jdk1.8.0_201-amd64/bin/javac" 0
+        - update-alternatives --set java /usr/java/jdk1.8.0_201-amd64/bin/java
+        - update-alternatives --set javac /usr/java/jdk1.8.0_201-amd64/bin/javac
       when: not javaInstallation.stat.exists
     - name: Copying and unzipping Hadoop distribution
       unarchive:
@@ -112,16 +122,13 @@
     - name: Moving Hadoop executables to HADOOP_HOME dir
       command: mv /usr/local/hadoop-2.9.2 /usr/local/hadoop
       when: not hadoopInstallation.stat.exists
-    - name: Creating hadoop_setup.sh file in /etc/profile.d if not existent
-      file:
-        path: /etc/profile.d/hadoop_setup.sh
-        owner: root
-        group: root
-        mode: "u+rw,g+rw,o+r"
-        state: touch
-    - name: Modifying hadoop_setup.sh
+    - name: Creating or modifying /etc/profile.d/hadoop_setup.sh
       blockinfile:
         path: /etc/profile.d/hadoop_setup.sh
+        create: yes
+        owner: root
+        group: root
+        mode: '775'
         block: |
             export PATH=$PATH:/usr/java/jdk1.8.0_201-amd64/bin:/usr/java/jdk1.8.0_201-amd64/jre/bin
             export J2SDKDIR=/usr/java/jdk1.8.0_201-amd64
@@ -423,6 +430,18 @@
   become: true
   become_method: sudo
   tasks:
+    - name: Setting variables
+      set_fact:
+        local_path: ~/git/AnsibleHadoopAndSparkDeployment
+        master_node: hadoopnode1
+        node_ips:
+            wp3node01: hadoopnode1
+            wp3node02: hadoopnode2
+            wp3node03: hadoopnode3
+            wp3node04: hadoopnode4
+            wp3node05: hadoopnode5
+            wp3node06: hadoopnode6
+            wp3node07: hadoopnode7
     - name: Determine if Spark is installed
       stat:
         path: /usr/local/spark/LICENSE
@@ -441,18 +460,30 @@
         group: wp3hadoop
         mode: "u+rw,g+rw,o-rwx"
         state: directory
-    - name: Copying masters file
-      copy:
-        src: "{{local_path}}/masters"
-        dest: /usr/local/hadoop/etc/hadoop/masters
-        owner: wp3hadoop
-        group: wp3hadoop
-    - name: Copying slaves file
-      copy:
-        src: "{{local_path}}/slaves"
-        dest: /usr/local/hadoop/etc/hadoop/slaves
-        owner: wp3hadoop
-        group: wp3hadoop
+    - name: TEMPORARY deleting /usr/local/hadoop/etc/hadoop/masters
+      file:
+        path: /usr/local/hadoop/etc/hadoop/masters
+        state: absent
+    - name: Add hosts to /usr/local/hadoop/etc/hadoop/masters
+      blockinfile:
+        path: /usr/local/hadoop/etc/hadoop/masters
+        create: yes
+        block: |
+          {{ master_node }}
+        marker: "# {mark} ANSIBLE MANAGED BLOCK {{ master_node }}"
+      loop: "{{ node_ips | dict2items }}"
+    - name: TEMPORARY deleting /usr/local/hadoop/etc/hadoop/slaves
+      file:
+        path: /usr/local/hadoop/etc/hadoop/slaves
+        state: absent
+    - name: Add hosts to /usr/local/hadoop/etc/hadoop/slaves
+      blockinfile:
+        path: /usr/local/hadoop/etc/hadoop/slaves
+        create: yes
+        block: |
+          {{ item.value }}
+        marker: "# {mark} ANSIBLE MANAGED BLOCK {{ item.value }}"
+      loop: "{{ node_ips | dict2items }}"
     - name: Copying and unzipping Spark distribution
       unarchive:
         src: "{{local_path}}/spark-2.4.3-bin-hadoop2.7.tgz"
@@ -461,28 +492,22 @@
     - name: Moving Spark executables to SPARK_HOME dir
       command: mv /usr/local/spark-2.4.3-bin-hadoop2.7 /usr/local/spark
       when: not sparkInstallation.stat.exists
-    - name: Creating spark-env.sh
-      file:
-        path: /usr/local/spark/conf/spark-env.sh
-        owner: wp3hadoop
-        group: wp3hadoop
-        state: touch
     - name: Modifying spark-env.sh
       blockinfile:
         path: /usr/local/spark/conf/spark-env.sh
+        create: yes
+        owner: wp3hadoop
+        group: wp3hadoop
         block: |
           export SPARK_HISTORY_OPTS="$SPARK_HISTORY_OPTS -Dspark.eventLog.enabled=true -Dspark.eventLog.dir=hdfs://{{master_node}}:8020/var/log/spark -Dspark.history.fs.logDirectory=hdfs://{{master_node}}:8020/var/log/spark"
           export HADOOP_CONF_DIR=$HADOOP_HOME/etc/hadoop
           export YARN_CONF_DIR=$HADOOP_HOME/etc/hadoop
-    - name: Creating spark-defaults.conf
-      file:
-        path: /usr/local/spark/conf/spark-defaults.conf
-        owner: wp3hadoop
-        group: wp3hadoop
-        state: touch
     - name: Modifying spark-defaults.conf
       blockinfile:
         path: /usr/local/spark/conf/spark-defaults.conf
+        create: yes
+        owner: wp3hadoop
+        group: wp3hadoop
         block: |
           spark.yarn.archive                      hdfs:///spark-jars/jars.tar.gz
           spark.master                            yarn
@@ -505,6 +530,18 @@
   become: true
   become_user: wp3hadoop
   tasks:
+    - name: Setting variables
+      set_fact:
+        local_path: ~/git/AnsibleHadoopAndSparkDeployment
+        master_node: hadoopnode1
+        node_ips:
+            wp3node01: hadoopnode1
+            wp3node02: hadoopnode2
+            wp3node03: hadoopnode3
+            wp3node04: hadoopnode4
+            wp3node05: hadoopnode5
+            wp3node06: hadoopnode6
+            wp3node07: hadoopnode7
     - name: Determine if /usr/local/hadoop/lib/spark-2.4.3-yarn-shuffle.jar exists
       stat:
         path: "/usr/local/hadoop/lib/spark-2.4.3-yarn-shuffle.jar"
@@ -521,6 +558,18 @@
   become: true
   become_user: wp3hadoop
   tasks:
+    - name: Setting variables
+      set_fact:
+        local_path: ~/git/AnsibleHadoopAndSparkDeployment
+        master_node: hadoopnode1
+        node_ips:
+            wp3node01: hadoopnode1
+            wp3node02: hadoopnode2
+            wp3node03: hadoopnode3
+            wp3node04: hadoopnode4
+            wp3node05: hadoopnode5
+            wp3node06: hadoopnode6
+            wp3node07: hadoopnode7
     - name: Determine if HDFS is formatted
       stat:
         path: "/mnt/{{inventory_hostname}}vol01/hadoop/hdfs/namenode/current"

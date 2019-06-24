@@ -478,11 +478,21 @@
       when: inventory_hostname == master_node.keys()[0]
     - name: "Verify {{hadoop_state_base_dir}}/hdfs/checkpoints exists"
       file:
-        path: "{{hostvars['wp3node01']['hadoop_state_base_dir']}}/hdfs/checkpoints"
+        path: "{{hadoop_state_base_dir}}/hdfs/checkpoints"
         owner: "{{ hadoop_user }}"
         group: "{{ hadoop_user }}"
         mode: "u+rw,g+rw,o-rwx"
         state: directory
+      when: inventory_hostname == master_node.keys()[0]
+    - name: "Delete {{hadoop_home}}/etc/hadoop/masters if exists"
+      file:
+        path: "{{hadoop_home}}/etc/hadoop/masters"
+        state: absent
+      when: inventory_hostname == master_node.keys()[0]
+    - name: "Delete {{hadoop_home}}/etc/hadoop/slaves if exists"
+      file:
+        path: "{{hadoop_home}}/etc/hadoop/slaves"
+        state: absent
       when: inventory_hostname == master_node.keys()[0]
     - name: "Add hosts to {{hadoop_home}}/etc/hadoop/masters"
       blockinfile:
